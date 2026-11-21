@@ -30,7 +30,7 @@ async function hydrateWithNai(nai: Record<string, unknown>) {
   return mod;
 }
 
-const OFFICIAL = 'https://image.novelai.net';
+const OFFICIAL = 'https://image.novelai.net/ai/generate-image';
 
 function vibe(id: string, extra: Record<string, unknown> = {}) {
   return { id, name: id, dataPath: `/user/files/${id}.json`, modelKeys: ['v4-5full'], strength: 0.6, ...extra };

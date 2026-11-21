@@ -29,7 +29,7 @@ import { strToU8, zipSync } from 'fflate';
 function nai(overrides: Partial<NaiRunConfig> = {}): NaiRunConfig {
   return {
     endpointId: 'nep_official',
-    url: 'https://image.novelai.net',
+    url: 'https://image.novelai.net/ai/generate-image',
     key: 'nai-test',
     model: 'nai-diffusion-4-5-full',
     artist: null,
@@ -75,23 +75,51 @@ function vibeData(overrides: Partial<NaiVibeData> = {}): NaiVibeData {
 }
 
 describe('naiEndpoint', () => {
-  it('自动补 /ai 前缀', () => {
-    expect(naiEndpoint('https://image.novelai.net', 'generate-image')).toBe(
+  it('生图端点原样使用(不再补 /ai 前缀)', () => {
+    expect(naiEndpoint('https://image.novelai.net/ai/generate-image', 'generate-image')).toBe(
       'https://image.novelai.net/ai/generate-image',
     );
-    expect(naiEndpoint('https://mirror.example.com/', 'encode-vibe')).toBe(
-      'https://mirror.example.com/ai/encode-vibe',
+    // 第三方网关把生图挂在任意路径下:填什么打什么
+    expect(naiEndpoint('https://api.rinko.ai/v1/nai/generate-image', 'generate-image')).toBe(
+      'https://api.rinko.ai/v1/nai/generate-image',
+    );
+    // 尾斜杠只做规整,不改变路径
+    expect(naiEndpoint('https://image.novelai.net/ai/generate-image/', 'generate-image')).toBe(
+      'https://image.novelai.net/ai/generate-image',
     );
   });
 
-  it('base 已是完整端点时原样使用', () => {
-    expect(naiEndpoint('https://x.com/proxy/ai/generate-image', 'generate-image')).toBe(
-      'https://x.com/proxy/ai/generate-image',
+  it('只填站点根 → 报错并给出该填的地址', () => {
+    // 只剩 origin 时无法猜测生图挂在哪条路径下:旧版靠补 /ai 蒙对,新版直接报错指路
+    expect(() => naiEndpoint('https://image.novelai.net', 'generate-image')).toThrow(/完整生图端点/);
+    expect(() => naiEndpoint('https://api.rinko.ai/', 'generate-image')).toThrow(/完整生图端点/);
+    // 带路径但不叫 generate-image 的地址照原样发:是不是端点由用户决定,不拦
+    expect(naiEndpoint('https://api.rinko.ai/v1/nai/gen', 'generate-image')).toBe(
+      'https://api.rinko.ai/v1/nai/gen',
     );
   });
 
-  it('空地址报错', () => {
+  it('encode-vibe 与生图端点同目录', () => {
+    expect(naiEndpoint('https://image.novelai.net/ai/generate-image', 'encode-vibe')).toBe(
+      'https://image.novelai.net/ai/encode-vibe',
+    );
+    expect(naiEndpoint('https://api.rinko.ai/v1/nai/generate-image', 'encode-vibe')).toBe(
+      'https://api.rinko.ai/v1/nai/encode-vibe',
+    );
+  });
+
+  it('订阅接口挂在站点根下,不在生图端点目录下', () => {
+    expect(naiEndpoint('https://image.novelai.net/ai/generate-image', 'user/subscription')).toBe(
+      'https://image.novelai.net/user/subscription',
+    );
+    expect(naiEndpoint('https://gw.example.com/proxy/ai/generate-image', 'user/subscription')).toBe(
+      'https://gw.example.com/user/subscription',
+    );
+  });
+
+  it('空地址与非法地址报错', () => {
     expect(() => naiEndpoint('  ', 'generate-image')).toThrow(NaiError);
+    expect(() => naiEndpoint('image.novelai.net/ai/generate-image', 'generate-image')).toThrow(NaiError);
   });
 });
 

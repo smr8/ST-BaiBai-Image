@@ -32,7 +32,9 @@ async function hydrateWithNai(nai: Record<string, unknown> | undefined) {
   return settings;
 }
 
-const OFFICIAL = 'https://image.novelai.net';
+const OFFICIAL = 'https://image.novelai.net/ai/generate-image';
+/** 旧版内置地址:只填站点根,靠 naiEndpoint 补 /ai。用于存量迁移用例。 */
+const LEGACY_OFFICIAL = 'https://image.novelai.net';
 
 describe('NAI 接入点库 · 存量折叠', () => {
   beforeEach(() => {
@@ -55,6 +57,16 @@ describe('NAI 接入点库 · 存量折叠', () => {
     expect(settings.nai.endpoints[0].id).toBe('nep_official');
     expect(settings.nai.endpoints[0].key).toBe('nai-old');
     expect(settings.nai.plans[0].endpointId).toBe('nep_official');
+  });
+
+  it('存量是旧版站点根写法 → 仍认作官方,并纠成完整生图端点', async () => {
+    // 老版本内置/默认填的是 https://image.novelai.net,靠 naiEndpoint 补 /ai 前缀。
+    // 新版 url 即完整端点,规范化必须把这条认成官方,而不是多造一条「我的接入点」。
+    const settings = await hydrateWithNai({ url: LEGACY_OFFICIAL, key: 'nai-legacy' });
+    expect(settings.nai.endpoints).toHaveLength(1);
+    expect(settings.nai.endpoints[0].id).toBe('nep_official');
+    expect(settings.nai.endpoints[0].url).toBe(OFFICIAL);
+    expect(settings.nai.endpoints[0].key).toBe('nai-legacy');
   });
 
   it('存量地址留空 → 同样折进官方那条(空地址不值得单开一行)', async () => {

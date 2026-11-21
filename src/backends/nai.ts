@@ -21,12 +21,13 @@ import type {
 
 /**
  * NovelAI 生图后端(浏览器直连,协议与官方 image.novelai.net 一致)。
- * url 可指向任意兼容站:官方/镜像/第三方转发,端点自动补 /ai 前缀。
+ * url 是**完整的生图端点**:填什么打什么,不再自动补 /ai 前缀 —— 官方站也照抄整段,
+ * 第三方网关把生图挂在 /v1/nai/generate-image 这类路径下同样能接(见 naiEndpoint)。
  *
  * 参考 st-chatu8 的实现口径:
- * - 生图 POST {base}/ai/generate-image,body {input, model, action:'generate', parameters}。
+ * - 生图 POST {url},body {input, model, action:'generate', parameters}。
  * - 响应是 zip(stream: 'msgpack'),解出第一张图。
- * - NAI3 的 vibe 直接发参考原图;NAI4/4.5 必须先经 /ai/encode-vibe 编码,
+ * - NAI3 的 vibe 直接发参考原图;NAI4/4.5 必须先经 encode-vibe 端点编码,
  *   生成时以 reference_image_multiple_cached(uuid + 编码数据) 形式叠加。
  * - .naiv4vibe 文件格式与官方互通(encodings 按模型 key 分组)。
  */
@@ -199,15 +200,58 @@ export function skipCfgAboveSigma(width: number, height: number, model: string, 
 /* ============ 地址与基础工具 ============ */
 
 /**
- * 拼端点:base 去掉尾斜杠后补 /ai/<path>;base 本身已是完整端点
- * (以 /ai/<path> 或 /<path> 结尾)时原样使用,方便第三方站给整段 URL。
+ * 解析 NAI 端点。接入点里填的 url **就是完整的生图端点**,原样使用:
+ * `https://image.novelai.net/ai/generate-image`、`https://api.rinko.ai/v1/nai/generate-image`
+ * 这类整段地址都由用户自己写全,不再自动拼 `/ai/generate-image`。
+ *
+ * 为什么不做「智能补全」:补全是猜。第三方网关把生图挂在 /v1/nai/ 下、镜像站挂在
+ * /proxy/ 下,猜错时拼出来的地址看着能通、实际 404,用户对着一条自己没填过的 URL
+ * 排查半天。填什么打什么之后,接入点地址就是请求地址,对不上了一眼能看出来。
+ *
+ * 代价是只填站点根会当场报错(见 endpointAsIs 的提示),而不是悄悄补成一条能发的地址。
+ * 另外两个端点由生图端点推出,不是重新拼站点根:
+ * - encode-vibe:与生图端点同目录(`.../ai/generate-image` → `.../ai/encode-vibe`);
+ * - user/subscription:挂在站点根下(官方是 `/user/subscription`,不在 `/ai/` 下);
+ *   第三方站多数没有这个接口,404 时 testNaiConnection 退化成「只验地址可达」。
  */
 export function naiEndpoint(url: string, path: string): string {
   const base = url.trim().replace(/\/+$/, '');
   if (!base) throw new NaiError('请先填写 NAI 接口地址');
   const seg = path.replace(/^\/+/, '');
-  if (base.endsWith(`/ai/${seg}`) || base.endsWith(`/${seg}`)) return base;
-  return `${base}/ai/${seg}`;
+  if (seg === 'generate-image') return endpointAsIs(base);
+  if (seg === 'user/subscription') {
+    const origin = endpointOrigin(base);
+    return origin ? `${origin}/user/subscription` : `${base}/user/subscription`;
+  }
+  const swapped = base.replace(/\/generate-image$/, `/${seg}`);
+  if (swapped !== base) return swapped;
+  throw new NaiError(`接口地址需填到生图端点(…/generate-image),才能推出 ${seg};当前地址:${base}`);
+}
+
+/**
+ * 生图端点原样返回,只拦下「只填了站点根」这一种写法:旧版靠 naiEndpoint 补 /ai,
+ * 新版不补,那种地址发出去必然 404。静默兼容一次等于把「拼不拼」这个坑又埋回去,
+ * 不如当场把该填的地址念给用户听。
+ */
+function endpointAsIs(base: string): string {
+  if (!endpointOrigin(base)) {
+    throw new NaiError(`NAI 接口地址无效:${base};应形如 https://image.novelai.net/ai/generate-image`);
+  }
+  if (!new URL(base).pathname.replace(/\/+$/, '')) {
+    throw new NaiError(
+      `NAI 接口地址需填完整生图端点,不能只填站点根;应形如 ${base}/ai/generate-image`,
+    );
+  }
+  return base;
+}
+
+/** 站点根(协议 + 主机 + 端口);地址本身不合法 → null。 */
+function endpointOrigin(base: string): string | null {
+  try {
+    return new URL(base).origin;
+  } catch {
+    return null;
+  }
 }
 
 export interface NaiSize {

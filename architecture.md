@@ -712,9 +712,14 @@ genState 同构(chatId|messageId|swipeId|seq),重建后按 key 认领。手动�
     解开的引用(接入点 url/key、画师串快照、按 vibeIds 过滤后的 vibe 列表,保持库内顺序)。
     `backends/nai.ts` 只吃 `NaiRunConfig`,不认识「方案」这个概念 —— 同 `effectiveComfyConn()` 的理由。
 - **NAI 接入点库**:`settings.nai.endpoints`(`NaiEndpoint[]`),由方案的 `endpointId` 引用。
-  一条接入点 = 名字 + 接口地址 + 该站的 API Key + 同时出图数(`concurrency`,1–4,默认 1)。起因是「公益站换着用」:
+  一条接入点 = 名字 + 完整生图端点地址 + 该站的 API Key + 同时出图数(`concurrency`,1–4,默认 1)。起因是「公益站换着用」:
   出图参数都在方案里,接入点只管出口 —— 换站只改方案里的接入点下拉,参数不用重配;
   多套方案可共用一个接入点。key 随条目走而非共用一份,因为各站各有各的 key。
+  - **地址语义:`url` 就是完整的生图端点**(如 `https://image.novelai.net/ai/generate-image`),`naiEndpoint`
+    原样使用,不再补 `/ai/generate-image` —— 第三方网关挂在任意路径下都能接,填什么打什么、对不上一眼可见。
+    只填站点根会当场报错并给出该填的地址(不做「智能补全」)。同站的另两个端点由它推出:`encode-vibe`
+    换末段(同目录),`user/subscription` 取站点根。老版本存的站点根写法在 `normalize` 里认作官方站
+    (`isOfficialNaiUrl`),内置条地址恒为新写法。
   - **不变式:`endpoints` 恒非空,且恒含内置官方那条**(`OFFICIAL_NAI_ENDPOINT_ID = 'nep_official'`,
     url 恒为 `NAI_OFFICIAL_URL`)。方案的 `endpointId` 悬空时回落 `[0]`。这三条**与工作流库同侧、
     与画师串库相反**:地址是必需品(空了直接出不了图),回落只是换个出口且出错会当场报连接失败,

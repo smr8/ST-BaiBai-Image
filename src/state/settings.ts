@@ -263,8 +263,24 @@ export interface NaiArtistPreset {
   previewPath?: string;
 }
 
-/** 官方站地址。内置那条接入点的 url 恒为它(UI 禁改,normalize 也把脏数据纠回来)。 */
-export const NAI_OFFICIAL_URL = 'https://image.novelai.net';
+/**
+ * 官方站地址,**完整生图端点**(不是站点根:新版 naiEndpoint 不再补 /ai 前缀)。
+ * 内置那条接入点的 url 恒为它(UI 禁改,normalize 也把脏数据纠回来)。
+ */
+export const NAI_OFFICIAL_URL = 'https://image.novelai.net/ai/generate-image';
+
+/**
+ * 旧版的官方地址(只填站点根,靠 naiEndpoint 补 /ai 前缀)。
+ * 仅用于识别存量数据,不再写回 settings:老配置里渠道级 url 正是它,
+ * 不认它就白造一条「我的接入点」出来。
+ */
+export const NAI_LEGACY_OFFICIAL_URL = 'https://image.novelai.net';
+
+/** 该 url 是否指向官方站(新写法 / 旧版站点根写法都算)。 */
+export function isOfficialNaiUrl(url: string): boolean {
+  const normalized = url.trim().replace(/\/+$/, '');
+  return normalized === NAI_OFFICIAL_URL || normalized === NAI_LEGACY_OFFICIAL_URL;
+}
 
 /** 内置官方接入点的固定 id。靠它认人而非靠 url 比对(与内置画师串 `bi_*` 同套路)。 */
 export const OFFICIAL_NAI_ENDPOINT_ID = 'nep_official';
@@ -286,7 +302,11 @@ export interface NaiEndpoint {
   id: string;
   /** 显示名(下拉切换用;允许重名,以 id 为键)。 */
   name: string;
-  /** 接口地址;内置官方那条恒为 NAI_OFFICIAL_URL。 */
+  /**
+   * 完整生图端点地址(如 `https://image.novelai.net/ai/generate-image`)。
+   * 填什么打什么:naiEndpoint 不再补 /ai/generate-image,第三方网关的整段路径照填即可。
+   * 内置官方那条恒为 NAI_OFFICIAL_URL。
+   */
   url: string;
   /** 该站的 API Key(公益站各有各的 key,故随条目走而非渠道级共用一份)。 */
   key: string;
@@ -2027,7 +2047,7 @@ function migrateNaiEndpoints(o: LegacyNaiRaw): NaiEndpoint[] {
     // 不另起一条,否则列表一上来就是两条内容相同的。
     const url = typeof o.url === 'string' ? o.url.trim() : '';
     const key = typeof o.key === 'string' ? o.key : '';
-    if (!url || url.replace(/\/+$/, '') === NAI_OFFICIAL_URL) return [officialNaiEndpoint(key, legacyConcurrency)];
+    if (!url || isOfficialNaiUrl(url)) return [officialNaiEndpoint(key, legacyConcurrency)];
     return [
       { id: `nep_legacy`, name: '我的接入点', url, key, concurrency: legacyConcurrency },
       officialNaiEndpoint(),

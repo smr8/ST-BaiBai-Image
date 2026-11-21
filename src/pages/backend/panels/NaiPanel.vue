@@ -1220,8 +1220,8 @@ async function removeVibe(vibe: NaiVibe) {
             :readonly="epDraftOfficial"
           />
         </label>
-        <label class="bbi-modal-field">
-          <span class="bbi-modal-label">地址</span>
+        <label class="bbi-modal-field" title="填完整的生图端点地址(官方那条即是范例);不会自动补 /ai/generate-image">
+          <span class="bbi-modal-label">生图端点</span>
           <input
             v-model="epDraft.url"
             class="bbi-input"
