@@ -4,6 +4,7 @@ import {
   applyVibes,
   buildNaiParameters,
   BUILTIN_NAI_ARTISTS,
+  decodeNaiImage,
   fullNegativePrompt,
   fullPositivePrompt,
   isBuiltinNaiArtist,
@@ -657,6 +658,49 @@ describe('unzipNaiImage', () => {
 
   it('非 zip 数据报友好错误', () => {
     expect(() => unzipNaiImage(strToU8('not a zip').buffer as ArrayBuffer)).toThrow(NaiError);
+  });
+});
+
+describe('decodeNaiImage(官方 zip + 第三方 JSON 双口径)', () => {
+  // 真 PNG 头 + 几个字节:格式按魔数认,不看接口自报的 image_format
+  const pngBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 9, 8, 7]);
+  const pngB64 = btoa(String.fromCharCode(...pngBytes));
+  const asBody = (text: string) => strToU8(text).buffer as ArrayBuffer;
+
+  it('官方 zip 照旧解', () => {
+    const zipped = zipSync({ 'image_0.png': strToU8('fake-png-bytes') });
+    const { base64, filename } = decodeNaiImage(zipped.buffer as ArrayBuffer);
+    expect(filename).toBe('image_0.png');
+    expect(atob(base64)).toBe('fake-png-bytes');
+  });
+
+  it('new-api 系 {job, images:[b64], image_format}', () => {
+    const body = asBody(JSON.stringify({ job: { steps: 28 }, images: [pngB64], image_format: 'png' }));
+    const { base64, filename } = decodeNaiImage(body);
+    expect(base64).toBe(pngB64);
+    expect(filename).toBe('image_0.png');
+  });
+
+  it('OpenAI 系 {data:[{b64_json}]}', () => {
+    const body = asBody(JSON.stringify({ created: 1, data: [{ b64_json: pngB64 }] }));
+    expect(decodeNaiImage(body).base64).toBe(pngB64);
+  });
+
+  it('data URI 前缀会被剥掉', () => {
+    const body = asBody(JSON.stringify({ images: [`data:image/png;base64,${pngB64}`] }));
+    expect(decodeNaiImage(body).base64).toBe(pngB64);
+  });
+
+  it('JPEG / WebP 按魔数落到正确扩展名', () => {
+    const jpeg = btoa(String.fromCharCode(0xff, 0xd8, 0xff, 0xe0, 1));
+    expect(decodeNaiImage(asBody(JSON.stringify({ images: [jpeg] }))).filename).toBe('image_0.jpeg');
+    const webp = btoa(String.fromCharCode(0x52, 0x49, 0x46, 0x46, 0, 0, 0, 0, 0x57, 0x45, 0x42, 0x50));
+    expect(decodeNaiImage(asBody(JSON.stringify({ images: [webp] }))).filename).toBe('image_0.webp');
+  });
+
+  it('既非 zip 也无图片字段 → 报错', () => {
+    expect(() => decodeNaiImage(asBody('{"error":"boom"}'))).toThrow(NaiError);
+    expect(() => decodeNaiImage(asBody('<html>oops</html>'))).toThrow(NaiError);
   });
 });
 

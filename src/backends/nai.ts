@@ -26,7 +26,8 @@ import type {
  *
  * 参考 st-chatu8 的实现口径:
  * - 生图 POST {url},body {input, model, action:'generate', parameters}。
- * - 响应是 zip(stream: 'msgpack'),解出第一张图。
+ * - 响应官方站是 zip(stream: 'msgpack'),解出第一张图;第三方网关可能直接回
+ *   base64 JSON,两条口径都由 decodeNaiImage 收口。
  * - NAI3 的 vibe 直接发参考原图;NAI4/4.5 必须先经 encode-vibe 端点编码,
  *   生成时以 reference_image_multiple_cached(uuid + 编码数据) 形式叠加。
  * - .naiv4vibe 文件格式与官方互通(encodings 按模型 key 分组)。
@@ -662,6 +663,66 @@ export function unzipNaiImage(buffer: ArrayBuffer): { base64: string; filename: 
   return { base64: uint8ToBase64(files[name]), filename: name };
 }
 
+/** 按魔数认格式:接口自报的 image_format 未必对,落盘扩展名跟真实字节走。 */
+function imageFormatOf(bytes: Uint8Array): string {
+  if (bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) return 'png';
+  if (bytes[0] === 0xff && bytes[1] === 0xd8) return 'jpeg';
+  if (bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46) return 'webp';
+  return 'png';
+}
+
+/** 从 JSON 里的一项取 base64:字符串本身,或 {b64_json|base64|data|image} 字段。 */
+function base64OfImage(value: unknown): string | null {
+  if (typeof value === 'string') {
+    return value.replace(/^data:image\/[a-z0-9.+-]+;base64,/i, '');
+  }
+  if (value && typeof value === 'object') {
+    const o = value as Record<string, unknown>;
+    for (const key of ['b64_json', 'base64', 'data', 'image']) {
+      const hit = o[key];
+      if (typeof hit === 'string' && hit) return hit.replace(/^data:image\/[a-z0-9.+-]+;base64,/i, '');
+    }
+  }
+  return null;
+}
+
+/** JSON 响应的两种口径:`{images:[b64]}`(new-api 系)与 `{data:[{b64_json}]}`(OpenAI 系)。 */
+function imageFromJson(text: string): { base64: string; filename: string } | null {
+  let json: unknown;
+  try {
+    json = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  const root = (json ?? {}) as Record<string, unknown>;
+  for (const list of [root.images, root.data]) {
+    if (!Array.isArray(list) || !list.length) continue;
+    const base64 = base64OfImage(list[0]);
+    if (!base64) continue;
+    return { base64, filename: `image_0.${imageFormatOf(base64ToUint8(base64))}` };
+  }
+  return null;
+}
+
+/**
+ * 解生图响应,两条口径都认:
+ * - 官方站:zip(stream: 'msgpack',内含 image_0.png);
+ * - 部分第三方网关(如 new-api 系的 /v1/nai/generate-image):直接回 JSON,图片是 base64
+ *   —— `{job, images: [b64], image_format: 'png'}` 或 OpenAI 式的 `{data: [{b64_json}]}`。
+ *
+ * 先看 zip 魔数再退 JSON,不靠 Content-Type:不少网关一律回 application/json、
+ * 官方静态站又可能给 application/octet-stream,信头不如信字节。官方路径(解 zip)
+ * 与改动前完全一致,第三方站只是多出一条分支。
+ */
+export function decodeNaiImage(buffer: ArrayBuffer): { base64: string; filename: string } {
+  const bytes = new Uint8Array(buffer);
+  // zip 本地文件头 "PK\x03\x04"
+  if (bytes.length > 4 && bytes[0] === 0x50 && bytes[1] === 0x4b) return unzipNaiImage(buffer);
+  const fromJson = imageFromJson(new TextDecoder().decode(bytes));
+  if (fromJson) return fromJson;
+  throw new NaiError('响应里既没有 zip 也没有 base64 图片(第三方站可能换了返回格式)');
+}
+
 /** generateNaiImage 的完整产出：图片 + 随图记录的元信息。 */
 export interface NaiImageOutput {
   result: ComfyImageResult;
@@ -736,7 +797,8 @@ export async function generateNaiImage(
       });
       if (!resp.ok) throw await naiHttpError(resp, 'NAI 生图失败');
 
-      const { base64, filename } = unzipNaiImage(await resp.arrayBuffer());
+      // zip(官方)/ JSON(第三方网关)都在这里收口,见 decodeNaiImage
+      const { base64, filename } = decodeNaiImage(await resp.arrayBuffer());
       const format = filename.split('.').pop()?.toLowerCase() || 'png';
       return {
         url: `data:image/${format === 'jpg' ? 'jpeg' : format};base64,${base64}`,
