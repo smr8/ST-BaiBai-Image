@@ -894,3 +894,45 @@ describe('鉴权头:桥接模式不与 ST 的 Basic 冲突', () => {
     expect(headers['X-NAI-Key']).toBeUndefined();
   });
 });
+
+describe('桥接地址的相对写法(按页面同源解析)', () => {
+  // 页面可能是 localhost、局域网 IP 或域名:写死主机就会跨源,浏览器不带 Basic、还要吃 CORS
+  const rel = '/api/plugins/nai-bridge/https://api.rinko.ai/v1/nai/generate-image';
+  const at = (path: string) => `/api/plugins/nai-bridge/https://api.rinko.ai${path}`;
+
+  it('生图端点原样保留', () => {
+    expect(naiEndpoint(rel, 'generate-image')).toBe(rel);
+  });
+
+  it('encode-vibe / 订阅端点同样只改里层', () => {
+    expect(naiEndpoint(rel, 'encode-vibe')).toBe(at('/v1/nai/encode-vibe'));
+    expect(naiEndpoint(rel, 'user/subscription')).toBe(at('/user/subscription'));
+  });
+
+  it('naiOrigin 返回相对前缀 + 里层站点根', () => {
+    expect(naiOrigin(rel)).toBe(at(''));
+  });
+
+  it('裸 / 报错', () => {
+    expect(() => naiEndpoint('/', 'generate-image')).toThrow(NaiError);
+  });
+
+  it('相对桥接地址仍走 X-NAI-Key', async () => {
+    const seen: Record<string, string>[] = [];
+    const png = btoa(String.fromCharCode(0x89, 0x50, 0x4e, 0x47, 1, 2, 3, 4));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: unknown, init: { headers?: Record<string, string> } = {}) => {
+        seen.push({ ...(init.headers ?? {}) });
+        return new Response(JSON.stringify({ images: [png], image_format: 'png' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }),
+    );
+    await generateNaiImage(nai({ url: rel, key: 'sk-test' }), { prompt: '1girl' });
+    expect(seen[0]['X-NAI-Key']).toBe('sk-test');
+    expect(seen[0].Authorization).toBeUndefined();
+    vi.unstubAllGlobals();
+  });
+});

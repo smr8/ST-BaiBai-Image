@@ -17,10 +17,12 @@ SillyTavern/plugins/nai-bridge/allowed-hosts.json
 ## 接入点地址
 
 ```
-http://localhost:8000/api/plugins/nai-bridge/https://api.rinko.ai/v1/nai/generate-image
+/api/plugins/nai-bridge/https://api.rinko.ai/v1/nai/generate-image
 ```
 
-（`localhost:8000` 换成你实际的 ST 地址；从手机访问时用局域网 IP 或域名。）
+用**相对路径**，不要写 `http://localhost:8000/...`：相对地址按页面同源解析，localhost、
+局域网 IP、域名、https 都能直接用；写死主机的话，页面从别的地址打开就变成跨源请求，
+浏览器不会带 ST 的基础鉴权凭据（表现为每次请求弹一次密码框），还要再吃一次 CORS。
 
 规则很简单：`/api/plugins/nai-bridge/` 后面接**上游完整地址**，插件原样转发。
 扩展推出 `encode-vibe`、`user/subscription`、`/v1/models` 时会自动沿用同一前缀。

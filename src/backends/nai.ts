@@ -276,6 +276,12 @@ export function naiOrigin(url: string): string | null {
  * 不如当场把该填的地址念给用户听。
  */
 function endpointAsIs(base: string): string {
+  // 相对地址(以 / 开头):按页面同源解析。桥接场景必须这么填 —— 写死 localhost 或某个 IP,
+  // 一旦页面从别的地址打开就是跨源,浏览器不带 Basic 凭据、还要再吃一次 CORS。
+  if (base.startsWith('/')) {
+    if (base.replace(/\/+$/, '') === '') throw new NaiError('NAI 接口地址不能只有 /;后面要跟完整路径');
+    return base;
+  }
   if (!endpointOrigin(base)) {
     throw new NaiError(`NAI 接口地址无效:${base};应形如 https://image.novelai.net/ai/generate-image`);
   }
