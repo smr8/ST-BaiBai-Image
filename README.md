@@ -77,6 +77,30 @@ https://github.com/baibai-git/ST-BaiBai-Image
 
 ---
 
+## 第三方 NAI 站的跨域（CORS）
+
+扩展是在浏览器里直连图像接口的。多数中转站只在普通响应上给 `Access-Control-Allow-Origin`，OPTIONS 预检却回一个不带该头的 204 —— 浏览器于是拒绝发出任何带 `Authorization` 的请求，表现为「测试」按钮点下去只报 `Failed to fetch`。**这不是 Key 或地址写错**，改它们都没用。
+
+本机跑一层反代即可（零依赖，只用 Node 自带模块）：
+
+```bash
+node scripts/nai-cors-proxy.mjs
+# 默认转发到 https://api.rinko.ai，监听 127.0.0.1:8787
+# 换站：TARGET=https://其它站 PORT=9000 node scripts/nai-cors-proxy.mjs
+```
+
+然后把接入点地址填成：
+
+```
+http://127.0.0.1:8787/v1/nai/generate-image
+```
+
+SillyTavern 跑在 https 下也能连：浏览器把 localhost 视作安全源，不算混合内容。
+
+另外，部分中转站不接受官方要求的 `stream: "msgpack"`（收到就回 502），扩展会在 5xx 时摘掉该字段自动重试一次，无需手动干预。
+
+---
+
 ## 给插件作者
 
 柏宝绘开放了一套公开接口（`globalThis.STBaiBaiImage`），别的插件可以：

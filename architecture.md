@@ -729,6 +729,13 @@ genState 同构(chatId|messageId|swipeId|seq),重建后按 key 认领。手动�
     要用官方镜像就新建一条普通条目(地址框以官方地址作 placeholder),那条随便改。
   - **UI**:列表只放名字(点开即编辑),增改都在弹窗里做草稿、点「完成」才写回 —— 照副 API 渠道的样子。
     连接测试测的是草稿,不必先保存;删除按钮在弹窗里,官方条与被方案引用的条目禁用并以 title 说明原因。
+  - **连接测试的探测顺序**(`testNaiConnection`):官方 `/user/subscription`(验 key + 订阅等级)→ 该站
+    把它回落成前端 HTML 或 404 时,退到 OpenAI 兼容的 `/v1/models`(拿得到模型列表就说明地址与 key 都对)
+    → 都不认才报「地址可达」。早先只做第一层,遇到「200 + HTML」的站会解析成空对象、报出
+    「连接正常:Tier undefined」,既不像成功也不像失败。fetch 抛 TypeError 时单独提示 CORS 与本地反代
+    (`scripts/nai-cors-proxy.mjs`)—— 那种情况改 key、改地址都救不回来。
+  - **网关兼容**:`stream: 'msgpack'` 是官方取 zip 的要求,部分中转站收到就回 502(实测 new-api 系)。
+    生图请求遇 5xx 且带了 stream 时摘掉它重试一次;响应由 `decodeNaiImage` 按 zip 魔数 / base64 JSON 双口径解。
   - **同时出图数迁移**:老的全局 `nai.concurrency` 分给当时已有的每一条(条目自带值优先,夹回 1–4);
     老平铺第三方地址场景下事后补的官方条从 1 起步(它从没跑过那个并发,官方站并发高最易 429)。
     迁移后不留顶层 `concurrency`。

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   applyVibes,
@@ -7,6 +7,7 @@ import {
   decodeNaiImage,
   fullNegativePrompt,
   fullPositivePrompt,
+  generateNaiImage,
   isBuiltinNaiArtist,
   naiArtistPrompt,
   naiDefaultQualityTags,
@@ -19,6 +20,7 @@ import {
   parseNaiv4vibe,
   parseResolution,
   skipCfgAboveSigma,
+  testNaiConnection,
   unzipNaiImage,
   vibeModelKey,
   NaiError,
@@ -728,5 +730,100 @@ describe('内置画师串配方(只读、随版本更新、不进 settings)', ()
     expect(isBuiltinNaiArtist('bi_default')).toBe(true);
     expect(isBuiltinNaiArtist('art_abc')).toBe(false);
     expect(isBuiltinNaiArtist('')).toBe(false);
+  });
+});
+
+describe('testNaiConnection:官方订阅 / 中转站模型列表 / CORS', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  const json = (body: unknown, status = 200) =>
+    new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+  const html = () => new Response('<!doctype html><html></html>', { status: 200, headers: { 'content-type': 'text/html' } });
+
+  it('官方站:订阅接口报出等级', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => json({ tier: 3, active: true })),
+    );
+    const result = await testNaiConnection({ url: 'https://image.novelai.net/ai/generate-image', key: 'k' });
+    expect(result.message).toBe('连接正常:Opus');
+  });
+
+  it('中转站把未知路径回落成前端 HTML → 退到 /v1/models,用模型数当凭据', async () => {
+    const calls: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: unknown) => {
+        calls.push(String(url));
+        return String(url).endsWith('/v1/models')
+          ? json({ data: [{ id: 'nai-diffusion-5-full' }, { id: 'nai-diffusion-4-5-curated' }] })
+          : html();
+      }),
+    );
+    const result = await testNaiConnection({ url: 'https://api.rinko.ai/v1/nai/generate-image', key: 'k' });
+    expect(result.message).toContain('2 个模型');
+    // 订阅接口在站点根下,模型列表也取站点根 —— 与生图端点是不是 /v1/nai 无关
+    expect(calls).toEqual(['https://api.rinko.ai/user/subscription', 'https://api.rinko.ai/v1/models']);
+  });
+
+  it('两处都没有 → 只报地址可达,不再出现 Tier undefined', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response('nope', { status: 404 })),
+    );
+    const result = await testNaiConnection({ url: 'https://mirror.example.com/ai/generate-image', key: 'k' });
+    expect(result.message).toContain('地址可达');
+    expect(result.message).not.toContain('undefined');
+  });
+
+  it('401 → 报 Key 错,且不再往下探', async () => {
+    const fetchMock = vi.fn(async () => json({ message: 'invalid token' }, 401));
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(testNaiConnection({ url: 'https://x.example.com/ai/generate-image', key: 'k' })).rejects.toThrow(
+      /API Key/,
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('fetch 抛 TypeError(浏览器 CORS)→ 提示反代,而不是光甩一句 Failed to fetch', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        throw new TypeError('Failed to fetch');
+      }),
+    );
+    await expect(
+      testNaiConnection({ url: 'https://api.rinko.ai/v1/nai/generate-image', key: 'k' }),
+    ).rejects.toThrow(/反代/);
+  });
+});
+
+describe('生图请求:网关不认 stream 时摘字段重试', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('首个请求 502 → 摘掉 stream 重试一次,解出 base64 JSON', async () => {
+    const png = btoa(String.fromCharCode(0x89, 0x50, 0x4e, 0x47, 9, 9, 9, 9));
+    const bodies: any[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: unknown, init: { body?: string } = {}) => {
+        const body = JSON.parse(String(init.body));
+        bodies.push(body);
+        if (bodies.length === 1) return new Response('error code: 502', { status: 502 });
+        return new Response(JSON.stringify({ images: [png], image_format: 'png' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }),
+    );
+
+    const output = await generateNaiImage(nai({ url: 'https://gw.example.com/v1/nai/generate-image', key: 'k' }), {
+      prompt: '1girl',
+    });
+
+    expect(bodies).toHaveLength(2);
+    expect(bodies[0].parameters).toHaveProperty('stream');
+    expect(bodies[1].parameters).not.toHaveProperty('stream');
+    expect(output.result.url.startsWith('data:image/png;base64,')).toBe(true);
   });
 });

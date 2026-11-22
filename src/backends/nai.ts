@@ -623,31 +623,93 @@ async function naiHttpError(resp: Response, label: string): Promise<NaiError> {
   }
 }
 
-/** 测试连接:优先 /user/subscription 验 key;第三方站无此接口(404)时只验证地址可达。 */
+/** 订阅接口的返回体:官方是 `{tier, active}` 或 `{subscription:{tier, active}}`。认不出 → null。 */
+function parseNaiSubscription(text: string): { tier?: number; active?: boolean } | null {
+  let json: any;
+  try {
+    json = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  if (!json || typeof json !== 'object') return null;
+  const sub = typeof json.subscription === 'object' && json.subscription ? json.subscription : json;
+  if (typeof sub.tier !== 'number' && typeof sub.active !== 'boolean') return null;
+  return {
+    tier: typeof sub.tier === 'number' ? sub.tier : undefined,
+    active: typeof sub.active === 'boolean' ? sub.active : undefined,
+  };
+}
+
+/** `/v1/models` 的模型 id 列表;不是这个形状(HTML 回落、错误体)就当空。 */
+function parseModelIds(text: string): string[] {
+  try {
+    const json: any = JSON.parse(text);
+    const list = Array.isArray(json?.data) ? json.data : [];
+    return list.map((m: any) => (typeof m?.id === 'string' ? m.id : '')).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * 探测请求。浏览器的 CORS 失败只会抛一句 `Failed to fetch`,对用户毫无信息量 ——
+ * 而那种情况改 key、改地址都救不回来,必须说清楚。
+ */
+async function naiProbe(url: string, key: string, signal?: AbortSignal): Promise<Response> {
+  try {
+    return await fetch(url, { headers: { Authorization: `Bearer ${key}` }, signal });
+  } catch (error) {
+    if ((error as { name?: string })?.name === 'AbortError') throw error;
+    throw new NaiError(
+      '连不上:请求没发出去 —— 网络不通,或被跨域(CORS)拦下。' +
+        '若浏览器控制台里有 CORS 字样,说明对方没给 Access-Control-Allow-Origin,改 Key、改地址都没用:' +
+        '本机跑 `node scripts/nai-cors-proxy.mjs` 加一层反代,接入点地址填 http://127.0.0.1:8787/v1/nai/generate-image',
+    );
+  }
+}
+
+/**
+ * 测试连接。三层探测,越往后越宽松 —— 官方站与公益站/中转站能验的东西本来就不同:
+ * 1. 官方订阅接口 `/user/subscription`:能同时验 key 与订阅等级;
+ * 2. 第三方站没有这个接口(404,或把未知路径回落成前端 HTML、连 200 都照给)时,
+ *    退到 OpenAI 兼容的 `/v1/models`:这把 key 拉得到模型列表,地址和 key 就都对;
+ * 3. 都不认 → 只报地址可达,让用户以实际生图为准。
+ *
+ * 早先只做第 1 层,遇到「200 + 前端 HTML」的站会解析成空对象,报出「连接正常:Tier undefined」
+ * —— 既不像成功也不像失败,是最糟的一种反馈。
+ */
 export async function testNaiConnection(
   nai: Pick<NaiRunConfig, 'url' | 'key'>,
   signal?: AbortSignal,
 ): Promise<{ message: string }> {
-  if (!nai.key.trim()) throw new NaiError('请先填写 API Key');
-  const resp = await fetch(naiEndpoint(nai.url, 'user/subscription'), {
-    headers: { Authorization: `Bearer ${nai.key.trim()}` },
-    signal,
-  });
-  if (resp.status === 404) {
-    return { message: '地址可达,但无订阅接口(第三方站);请以实际生图验证' };
+  const key = nai.key.trim();
+  if (!key) throw new NaiError('请先填写 API Key');
+
+  const sub = await naiProbe(naiEndpoint(nai.url, 'user/subscription'), key, signal);
+  // 401 是明确的 key 问题;402 是订阅问题。403 不算:不少站对未知路径就回 403,继续往下探
+  if (sub.status === 401 || sub.status === 402) throw await naiHttpError(sub, '连接 NAI 失败');
+  if (sub.ok) {
+    const info = parseNaiSubscription(await sub.text());
+    if (info) {
+      const tierName = ['Free', 'Tablet', 'Scroll', 'Opus'][Number(info.tier)] ?? `Tier ${info.tier}`;
+      return { message: `连接正常:${tierName}${info.active === false ? '(订阅未激活)' : ''}` };
+    }
+    // 200 但不是订阅体:多半是前端 HTML 回落,接着探模型列表
   }
-  if (!resp.ok) throw await naiHttpError(resp, '连接 NAI 失败');
-  const data = (await resp.json().catch(() => null)) as {
-    tier?: number;
-    active?: boolean;
-    subscription?: { tier?: number; active?: boolean; expiresAt?: number };
-  } | null;
-  const tier = data?.subscription?.tier ?? data?.tier;
-  const active = data?.subscription?.active ?? data?.active;
-  const tierName = ['Free', 'Tablet', 'Scroll', 'Opus'][Number(tier)] ?? `Tier ${tier}`;
-  return {
-    message: `连接正常:${tierName}${active === false ? '(订阅未激活)' : ''}`,
-  };
+
+  const origin = endpointOrigin(nai.url.trim().replace(/\/+$/, ''));
+  if (origin) {
+    const models = await naiProbe(`${origin}/v1/models`, key, signal);
+    if (models.status === 401) throw await naiHttpError(models, '连接 NAI 失败');
+    if (models.ok) {
+      const ids = parseModelIds(await models.text());
+      if (ids.length) {
+        const sample = ids.slice(0, 2).join('、') + (ids.length > 2 ? ' 等' : '');
+        return { message: `连接正常:中转站可用,该 Key 能看到 ${ids.length} 个模型(${sample})` };
+      }
+    }
+  }
+  return { message: '地址可达,但该站没有订阅/模型接口;请以实际生图验证' };
 }
 
 /** 解 NAI 返回的 zip,取第一张图转 base64。 */
@@ -775,26 +837,38 @@ export async function generateNaiImage(
     toastr.warning(`vibe「${skipped.join('、')}」${reason},已跳过`, '柏宝绘');
   }
 
-  const body = {
+  const bodyFor = (parameters: JsonObject) => ({
     input: fullPositivePrompt(nai, values.prompt, values.nl),
     model: nai.model,
     action: 'generate',
-    parameters: params,
+    parameters,
     use_new_shared_trial: true,
-  };
+  });
+  const post = (payload: unknown) =>
+    fetch(naiEndpoint(nai.url, 'generate-image'), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${nai.key.trim()}`,
+      },
+      body: JSON.stringify(payload),
+      signal,
+    });
   // 只把「发请求 + 解包」包进重试:上面拼参数、读 vibe 数据的活是一次性的,
   // 重跑它们既白费功夫,也会把 vibe 缺编码的 toastr 警告重复弹出来。
   const result = await runNaiWithRetry(
     async () => {
-      const resp = await fetch(naiEndpoint(nai.url, 'generate-image'), {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${nai.key.trim()}`,
-        },
-        body: JSON.stringify(body),
-        signal,
-      });
+      let resp = await post(bodyFor(params));
+      // stream: 'msgpack' 是官方取 zip 的要求,但有些中转站(实测 new-api 系)不认它:
+      // 收到就回一个光秃秃的 502,去掉则正常返回 base64 JSON。502 无法区分「参数被拒」
+      // 与「上游真挂了」,故只在 5xx 且带了 stream 时摘掉重试一次 —— 官方站不会走到这里
+      // (它认 stream,不会 5xx),第三方站则通常一次就过。
+      if (resp.status >= 500 && 'stream' in params) {
+        console.warn(`[柏宝绘] 生图返回 ${resp.status},疑似不支持 stream=msgpack;摘掉该字段重试一次`);
+        const withoutStream = { ...params };
+        delete withoutStream.stream;
+        resp = await post(bodyFor(withoutStream));
+      }
       if (!resp.ok) throw await naiHttpError(resp, 'NAI 生图失败');
 
       // zip(官方)/ JSON(第三方网关)都在这里收口,见 decodeNaiImage
