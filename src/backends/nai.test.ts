@@ -967,3 +967,29 @@ describe('桥接地址的无斜杠写法(给会合并 // 的反向代理)', () =
     );
   });
 });
+
+describe('桥接地址 404 必须报错，不能假通过', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('插件没加载时给出明确提示，而不是「地址可达」', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response('<!doctype html><h1>Not Found</h1>', { status: 404 })),
+    );
+    await expect(
+      testNaiConnection({
+        url: '/api/plugins/nai-bridge/https/api.rinko.ai/v1/nai/generate-image',
+        key: 'k',
+      }),
+    ).rejects.toThrow(/桥接路由不存在/);
+  });
+
+  it('普通地址仍是「地址可达」兜底', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response('nope', { status: 404 })),
+    );
+    const result = await testNaiConnection({ url: 'https://mirror.example.com/ai/generate-image', key: 'k' });
+    expect(result.message).toContain('地址可达');
+  });
+});

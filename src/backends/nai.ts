@@ -760,9 +760,19 @@ export async function testNaiConnection(
   const key = nai.key.trim();
   if (!key) throw new NaiError('请先填写 API Key');
 
+  const bridge = parseBridgeEndpoint(nai.url.trim().replace(/\/+$/, ''));
   const sub = await naiProbe(naiEndpoint(nai.url, 'user/subscription'), key, signal);
   // 401 是明确的 key 问题;402 是订阅问题。403 不算:不少站对未知路径就回 403,继续往下探
   if (sub.status === 401 || sub.status === 402) throw await naiHttpError(sub, '连接 NAI 失败');
+  // 桥接模式下 404 只有一个解释:ST 上没加载插件(或反代把路径改写了)。
+  // 早先这里沿用「404 → 地址可达」的兜底,于是插件没装也弹绿条成功 —— 用户以为通了,
+  // 出图时才炸。桥接地址是我们自己的路由,404 必须当场说清楚。
+  if (sub.status === 404 && bridge) {
+    throw new NaiError(
+      '桥接路由不存在(404):这台 ST 上没有加载 nai-bridge 插件,或反向代理改写了路径。' +
+        '确认 plugins/nai-bridge/ 已就位、config.yaml 里 enableServerPlugins: true,并重启 ST',
+    );
+  }
   if (sub.ok) {
     const info = parseNaiSubscription(await sub.text());
     if (info) {
