@@ -4,10 +4,10 @@
 
 ## 安装
 
-把整个 `nai-bridge` 目录放进 SillyTavern 的 `plugins/` 下：
+把整个 `nai-bridge` 目录放进 SillyTavern 的 `plugins/` 下（入口必须是 `index.cjs`：Docker 镜像的根 package.json 是 `"type": "module"`，叫 index.js 会被当 ESM 解析，`require` 直接报错）：
 
 ```
-SillyTavern/plugins/nai-bridge/index.js
+SillyTavern/plugins/nai-bridge/index.cjs
 SillyTavern/plugins/nai-bridge/allowed-hosts.json
 ```
 

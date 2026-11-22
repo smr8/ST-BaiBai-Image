@@ -13,7 +13,9 @@
  * 安全:转发目标受同目录 allowed-hosts.json 限制。ST 的 listen: true 会把端口暴露到
  * 局域网,不限制就等于开了一个开放代理。
  *
- * 注:plugins/package.json 声明了 "type": "commonjs",所以这里用 CJS 写法。
+ * 注:入口用 .cjs 而不是 .js —— 本机 Windows 安装的 plugins/package.json 声明了 commonjs,
+ * 但 Docker 镜像(如 SillyTavern 官方镜像)/home/node/app 根 package.json 是 "type": "module",
+ * 同名的 index.js 会被当 ESM 解析,require 直接报 not defined。.cjs 两边都按 CommonJS 处理。
  */
 const fs = require('node:fs');
 const path = require('node:path');
