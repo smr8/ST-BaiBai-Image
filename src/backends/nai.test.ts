@@ -14,6 +14,7 @@ import {
   naiDefaultUndesired,
   naiEndpoint,
   naiFixedSettings,
+  naiOrigin,
   naiRandomSeed,
   naiSupportsCharacterPrompts,
   naiSupportsVibes,
@@ -825,5 +826,35 @@ describe('生图请求:网关不认 stream 时摘字段重试', () => {
     expect(bodies[0].parameters).toHaveProperty('stream');
     expect(bodies[1].parameters).not.toHaveProperty('stream');
     expect(output.result.url.startsWith('data:image/png;base64,')).toBe(true);
+  });
+});
+
+describe('桥接地址(同源前缀 + 整段上游 URL)', () => {
+  // ST 服务端插件 / cors-anywhere 的写法:前缀留在 ST 上,里层是真正的上游地址
+  const bridge = 'http://127.0.0.1:8000/api/plugins/nai-bridge/https://api.rinko.ai/v1/nai/generate-image';
+  const at = (path: string) => `http://127.0.0.1:8000/api/plugins/nai-bridge/https://api.rinko.ai${path}`;
+
+  it('生图端点:前缀 + 上游地址原样透传', () => {
+    expect(naiEndpoint(bridge, 'generate-image')).toBe(bridge);
+  });
+
+  it('encode-vibe:只换里层末段,前缀不动', () => {
+    expect(naiEndpoint(bridge, 'encode-vibe')).toBe(at('/v1/nai/encode-vibe'));
+  });
+
+  it('订阅端点:取里层站点根,前缀跟着带上', () => {
+    expect(naiEndpoint(bridge, 'user/subscription')).toBe(at('/user/subscription'));
+  });
+
+  it('naiOrigin:返回「前缀 + 里层站点根」,供测试连接拼 /v1/models', () => {
+    expect(naiOrigin(bridge)).toBe(at(''));
+    expect(naiOrigin('https://api.rinko.ai/v1/nai/generate-image')).toBe('https://api.rinko.ai');
+    expect(naiOrigin('   ')).toBeNull();
+  });
+
+  it('普通地址不会被误判成桥接', () => {
+    expect(naiEndpoint('https://api.rinko.ai/v1/nai/generate-image', 'generate-image')).toBe(
+      'https://api.rinko.ai/v1/nai/generate-image',
+    );
   });
 });

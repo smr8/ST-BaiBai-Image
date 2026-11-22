@@ -201,6 +201,18 @@ export function skipCfgAboveSigma(width: number, height: number, model: string, 
 /* ============ 地址与基础工具 ============ */
 
 /**
+ * 拆「同源前缀 + 整段上游地址」。ST 服务端插件 / cors-anywhere 这类转发都这个套路:
+ *   /api/plugins/nai-bridge/https://api.rinko.ai/v1/nai/generate-image
+ * 前缀原样保留,端点规则套在里层的上游地址上 —— 这样第三方站不用开 CORS、
+ * 浏览器也不会发预检(同源)。返回 null = 普通地址。
+ */
+function splitEmbeddedEndpoint(base: string): { prefix: string; target: string } | null {
+  const match = base.match(/^(.*\/)(https?:\/\/[^/?#].*)$/);
+  if (!match) return null;
+  return { prefix: match[1], target: match[2] };
+}
+
+/**
  * 解析 NAI 端点。接入点里填的 url **就是完整的生图端点**,原样使用:
  * `https://image.novelai.net/ai/generate-image`、`https://api.rinko.ai/v1/nai/generate-image`
  * 这类整段地址都由用户自己写全,不再自动拼 `/ai/generate-image`。
@@ -213,11 +225,15 @@ export function skipCfgAboveSigma(width: number, height: number, model: string, 
  * 另外两个端点由生图端点推出,不是重新拼站点根:
  * - encode-vibe:与生图端点同目录(`.../ai/generate-image` → `.../ai/encode-vibe`);
  * - user/subscription:挂在站点根下(官方是 `/user/subscription`,不在 `/ai/` 下);
- *   第三方站多数没有这个接口,404 时 testNaiConnection 退化成「只验地址可达」。
+ *   第三方站多数没有这个接口,404 时 testNaiConnection 退化成「只验模型列表/地址可达」。
+ *
+ * 地址里若嵌着整段上游地址(桥接写法),前缀保留、规则套在里层,详见 splitEmbeddedEndpoint。
  */
 export function naiEndpoint(url: string, path: string): string {
   const base = url.trim().replace(/\/+$/, '');
   if (!base) throw new NaiError('请先填写 NAI 接口地址');
+  const embedded = splitEmbeddedEndpoint(base);
+  if (embedded) return embedded.prefix + naiEndpoint(embedded.target, path);
   const seg = path.replace(/^\/+/, '');
   if (seg === 'generate-image') return endpointAsIs(base);
   if (seg === 'user/subscription') {
@@ -227,6 +243,18 @@ export function naiEndpoint(url: string, path: string): string {
   const swapped = base.replace(/\/generate-image$/, `/${seg}`);
   if (swapped !== base) return swapped;
   throw new NaiError(`接口地址需填到生图端点(…/generate-image),才能推出 ${seg};当前地址:${base}`);
+}
+
+/** 站点根;桥接地址返回「前缀 + 里层站点根」(测试连接拼 /v1/models 用)。 */
+export function naiOrigin(url: string): string | null {
+  const base = url.trim().replace(/\/+$/, '');
+  if (!base) return null;
+  const embedded = splitEmbeddedEndpoint(base);
+  if (embedded) {
+    const inner = naiOrigin(embedded.target);
+    return inner ? `${embedded.prefix}${inner}` : null;
+  }
+  return endpointOrigin(base);
 }
 
 /**
@@ -697,7 +725,7 @@ export async function testNaiConnection(
     // 200 但不是订阅体:多半是前端 HTML 回落,接着探模型列表
   }
 
-  const origin = endpointOrigin(nai.url.trim().replace(/\/+$/, ''));
+  const origin = naiOrigin(nai.url);
   if (origin) {
     const models = await naiProbe(`${origin}/v1/models`, key, signal);
     if (models.status === 401) throw await naiHttpError(models, '连接 NAI 失败');

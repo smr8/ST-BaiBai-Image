@@ -720,6 +720,10 @@ genState 同构(chatId|messageId|swipeId|seq),重建后按 key 认领。手动�
     只填站点根会当场报错并给出该填的地址(不做「智能补全」)。同站的另两个端点由它推出:`encode-vibe`
     换末段(同目录),`user/subscription` 取站点根。老版本存的站点根写法在 `normalize` 里认作官方站
     (`isOfficialNaiUrl`),内置条地址恒为新写法。
+  - **桥接地址**:`naiEndpoint` 认得「同源前缀 + 整段上游 URL」这种写法
+    (`/api/plugins/nai-bridge/https://api.rinko.ai/v1/nai/generate-image`,cors-anywhere 同套路):
+    前缀原样保留,端点规则套在里层。配套 `st-plugin/nai-bridge`(ST 服务端插件,同进程、不占端口)
+    解决第三方站预检不给 ACAO 的问题;`naiOrigin` 负责把「前缀 + 里层站点根」还给测试连接。
   - **不变式:`endpoints` 恒非空,且恒含内置官方那条**(`OFFICIAL_NAI_ENDPOINT_ID = 'nep_official'`,
     url 恒为 `NAI_OFFICIAL_URL`)。方案的 `endpointId` 悬空时回落 `[0]`。这三条**与工作流库同侧、
     与画师串库相反**:地址是必需品(空了直接出不了图),回落只是换个出口且出错会当场报连接失败,

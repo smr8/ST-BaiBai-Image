@@ -79,9 +79,19 @@ https://github.com/baibai-git/ST-BaiBai-Image
 
 ## 第三方 NAI 站的跨域（CORS）
 
-扩展是在浏览器里直连图像接口的。多数中转站只在普通响应上给 `Access-Control-Allow-Origin`，OPTIONS 预检却回一个不带该头的 204 —— 浏览器于是拒绝发出任何带 `Authorization` 的请求，表现为「测试」按钮点下去只报 `Failed to fetch`。**这不是 Key 或地址写错**，改它们都没用。
+扩展是在浏览器里直连图像接口的。多数中转站只在普通响应上给 `Access-Control-Allow-Origin`，OPTIONS 预检却回一个不带该头的 204 —— 浏览器于是拒绝发出任何带 `Authorization` 的请求，表现为「测试」按钮点下去只报 `Failed to fetch`。**这不是 Key 或地址写错**，改它们都没用；浏览器侧也绕不过去（试过用 `text/plain` 发 JSON、把 Key 放 query，上游都不认）。出路只有两条：让站点开 CORS，或者加一层同源转发。
 
-本机跑一层反代即可（零依赖，只用 Node 自带模块）：
+### 方案 A：ST 服务端插件（推荐，不另起进程、不占端口）
+
+把 `st-plugin/nai-bridge` 整个目录复制到 `SillyTavern/plugins/` 下，确认 `config.yaml` 里 `enableServerPlugins: true`，重启 ST。接入点地址填：
+
+```
+http://localhost:8000/api/plugins/nai-bridge/https://api.rinko.ai/v1/nai/generate-image
+```
+
+规则：`/api/plugins/nai-bridge/` 后面接**上游完整地址**，插件原样转发；测连接、vibe 编码、模型探测都会沿用同一前缀。请求走 ST 自己的地址，没有跨域这回事，手机访问 ST 也能用（把 `localhost` 换成局域网地址）。可转发的站点由 `plugins/nai-bridge/allowed-hosts.json` 限定，避免 `listen: true` 时变成开放代理。
+
+### 方案 B：本地反代进程
 
 ```bash
 node scripts/nai-cors-proxy.mjs
@@ -89,13 +99,11 @@ node scripts/nai-cors-proxy.mjs
 # 换站：TARGET=https://其它站 PORT=9000 node scripts/nai-cors-proxy.mjs
 ```
 
-然后把接入点地址填成：
+接入点地址填 `http://127.0.0.1:8787/v1/nai/generate-image`。ST 跑在 https 下也能连：浏览器把 localhost 视作安全源，不算混合内容。
 
-```
-http://127.0.0.1:8787/v1/nai/generate-image
-```
+### 方案 C：让站点开 CORS
 
-SillyTavern 跑在 https 下也能连：浏览器把 localhost 视作安全源，不算混合内容。
+在站点的反向代理 / new-api 配置里给 `OPTIONS` 预检补上 `Access-Control-Allow-Origin` 与 `Access-Control-Allow-Headers: authorization,content-type`，扩展就能直连，不需要任何转发。这条路只有站点管理员能做。
 
 另外，部分中转站不接受官方要求的 `stream: "msgpack"`（收到就回 502），扩展会在 5xx 时摘掉该字段自动重试一次，无需手动干预。
 
