@@ -858,3 +858,39 @@ describe('桥接地址(同源前缀 + 整段上游 URL)', () => {
     );
   });
 });
+
+describe('鉴权头:桥接模式不与 ST 的 Basic 冲突', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  const png = btoa(String.fromCharCode(0x89, 0x50, 0x4e, 0x47, 1, 2, 3, 4));
+  const firstCallHeaders = async (url: string) => {
+    const seen: Record<string, string>[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: unknown, init: { headers?: Record<string, string> } = {}) => {
+        seen.push({ ...(init.headers ?? {}) });
+        return new Response(JSON.stringify({ images: [png], image_format: 'png' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }),
+    );
+    await generateNaiImage(nai({ url, key: 'sk-test' }), { prompt: '1girl' });
+    return seen[0];
+  };
+
+  it('桥接地址:Key 走 X-NAI-Key,Authorization 留给浏览器带 Basic', async () => {
+    const headers = await firstCallHeaders(
+      'http://localhost:8000/api/plugins/nai-bridge/https://api.rinko.ai/v1/nai/generate-image',
+    );
+    expect(headers['X-NAI-Key']).toBe('sk-test');
+    // 抢了 Authorization 的话,ST 的 basicAuth 判定 scheme 不是 Basic → 每次请求弹一次密码框
+    expect(headers.Authorization).toBeUndefined();
+  });
+
+  it('普通地址:仍是标准的 Authorization: Bearer', async () => {
+    const headers = await firstCallHeaders('https://image.novelai.net/ai/generate-image');
+    expect(headers.Authorization).toBe('Bearer sk-test');
+    expect(headers['X-NAI-Key']).toBeUndefined();
+  });
+});

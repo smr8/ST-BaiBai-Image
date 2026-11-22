@@ -90,6 +90,12 @@ async function init(router) {
     delete headers['accept-encoding'];
     delete headers.cookie;
     delete headers.referer;
+    // ST 开着 basicAuthMode 时,浏览器会在这个请求上带 Authorization: Basic(那是 ST 自己的凭据)。
+    // 它绝不能转发给第三方站;NAI 的 Key 由扩展放在 X-NAI-Key 里,这里换回标准写法。
+    delete headers.authorization;
+    const naiKey = headers['x-nai-key'];
+    delete headers['x-nai-key'];
+    if (naiKey) headers.authorization = `Bearer ${naiKey}`;
 
     const body = await readBody(req);
     const controller = new AbortController();

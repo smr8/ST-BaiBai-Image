@@ -213,6 +213,19 @@ function splitEmbeddedEndpoint(base: string): { prefix: string; target: string }
 }
 
 /**
+ * 鉴权头。桥接地址与 ST 同源,而 ST 开着 basicAuthMode 时,浏览器全靠 `Authorization` 头
+ * 带 Basic 凭据 —— 我们再往同一个头里塞 Bearer,两边只能活一个:ST 拿到的 scheme 不是 Basic,
+ * 直接把请求打回 401,浏览器于是每请求一次就弹一次密码框(实测症状:每出一张图输一次密码)。
+ *
+ * 所以桥接模式把 Key 挪到 `X-NAI-Key`,由服务端插件在转发前换回 `Authorization: Bearer`。
+ * 非桥接地址(官方站、本地反代)没有这个冲突,继续用标准写法。
+ */
+function naiAuthHeaders(url: string, key: string): Record<string, string> {
+  const base = url.trim().replace(/\/+$/, '');
+  return splitEmbeddedEndpoint(base) ? { 'X-NAI-Key': key } : { Authorization: `Bearer ${key}` };
+}
+
+/**
  * 解析 NAI 端点。接入点里填的 url **就是完整的生图端点**,原样使用:
  * `https://image.novelai.net/ai/generate-image`、`https://api.rinko.ai/v1/nai/generate-image`
  * 这类整段地址都由用户自己写全,不再自动拼 `/ai/generate-image`。
@@ -685,7 +698,7 @@ function parseModelIds(text: string): string[] {
  */
 async function naiProbe(url: string, key: string, signal?: AbortSignal): Promise<Response> {
   try {
-    return await fetch(url, { headers: { Authorization: `Bearer ${key}` }, signal });
+    return await fetch(url, { headers: naiAuthHeaders(url, key), signal });
   } catch (error) {
     if ((error as { name?: string })?.name === 'AbortError') throw error;
     throw new NaiError(
@@ -877,7 +890,7 @@ export async function generateNaiImage(
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${nai.key.trim()}`,
+        ...naiAuthHeaders(nai.url, nai.key.trim()),
       },
       body: JSON.stringify(payload),
       signal,
@@ -968,7 +981,7 @@ export async function encodeVibeImage(
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${nai.key.trim()}`,
+          ...naiAuthHeaders(nai.url, nai.key.trim()),
         },
         body: JSON.stringify({ image: imageBase64, information_extracted: infoExtracted, model }),
         signal,
