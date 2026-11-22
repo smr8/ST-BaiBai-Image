@@ -83,13 +83,16 @@ https://github.com/baibai-git/ST-BaiBai-Image
 
 ### 方案 A：ST 服务端插件（推荐，不另起进程、不占端口）
 
-把 `st-plugin/nai-bridge` 整个目录复制到 `SillyTavern/plugins/` 下，确认 `config.yaml` 里 `enableServerPlugins: true`，重启 ST。接入点地址填（**用相对路径，不要写主机**）：
+把 `st-plugin/nai-bridge` 整个目录复制到 `SillyTavern/plugins/` 下，确认 `config.yaml` 里 `enableServerPlugins: true`，重启 ST。接入点地址填（**相对路径 + 无斜杠形式**）：
 
 ```
-/api/plugins/nai-bridge/https://api.rinko.ai/v1/nai/generate-image
+/api/plugins/nai-bridge/https/api.rinko.ai/v1/nai/generate-image
 ```
 
-相对地址按页面同源解析，所以 localhost、局域网 IP、域名、https 都不用改配置。写死 `http://localhost:8000/...` 而页面从别的地址打开时就成了跨源请求：浏览器不会带 ST 的基础鉴权凭据，于是每发一次请求弹一次密码框，还要再吃一次 CORS。
+两个细节都是踩过坑才定的：
+
+- **相对路径**（以 `/` 开头）按页面同源解析，localhost、局域网 IP、域名、https 都不用改配置。写死 `http://localhost:8000/...` 而页面从别的地址打开就成了跨源请求：浏览器不会带 ST 的基础鉴权凭据，于是每发一次请求弹一次密码框，还要再吃一次 CORS。
+- **无斜杠形式**（`https/api.rinko.ai/...` 而不是 `https://api.rinko.ai/...`）避开路径里的 `//`。nginx 默认 `merge_slashes on` 会合并重复斜杠，域名走反代时可能被改写成另一条路径、落进没有鉴权配置的 location，表现又是反复要密码。直连 ST（局域网访问）时两种写法都行，带双斜杠的老写法仍然兼容。
 
 规则：`/api/plugins/nai-bridge/` 后面接**上游完整地址**，插件原样转发；测连接、vibe 编码、模型探测都会沿用同一前缀。请求走 ST 自己的地址，没有跨域这回事，手机访问 ST 也能用（把 `localhost` 换成局域网地址）。可转发的站点由 `plugins/nai-bridge/allowed-hosts.json` 限定，避免 `listen: true` 时变成开放代理。
 

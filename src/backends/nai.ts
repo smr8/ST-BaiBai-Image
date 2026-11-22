@@ -201,15 +201,39 @@ export function skipCfgAboveSigma(width: number, height: number, model: string, 
 /* ============ 地址与基础工具 ============ */
 
 /**
- * 拆「同源前缀 + 整段上游地址」。ST 服务端插件 / cors-anywhere 这类转发都这个套路:
- *   /api/plugins/nai-bridge/https://api.rinko.ai/v1/nai/generate-image
- * 前缀原样保留,端点规则套在里层的上游地址上 —— 这样第三方站不用开 CORS、
- * 浏览器也不会发预检(同源)。返回 null = 普通地址。
+ * 拆「同源前缀 + 上游地址」。ST 服务端插件 / cors-anywhere 这类转发的路径约定:
+ *   带双斜杠:  /api/plugins/nai-bridge/https://api.rinko.ai/v1/nai/generate-image
+ *   无斜杠形式:/api/plugins/nai-bridge/https/api.rinko.ai/v1/nai/generate-image
+ * 第二种是给反向代理准备的:很多代理(nginx merge_slashes 默认开)会合并路径里的 `//`,
+ * 合并后路径对不上、还可能落进没有鉴权配置的 location,表现就是域名访问时反复要密码。
+ *
+ * 返回 null = 普通地址。前缀可以是绝对的,也可以是相对(以 / 开头,按页面同源解析)。
  */
-function splitEmbeddedEndpoint(base: string): { prefix: string; target: string } | null {
-  const match = base.match(/^(.*\/)(https?:\/\/[^/?#].*)$/);
-  if (!match) return null;
-  return { prefix: match[1], target: match[2] };
+interface BridgeEndpoint {
+  prefix: string;
+  scheme: string;
+  host: string;
+  /** 上游路径,以 / 开头;可能为空串。 */
+  path: string;
+  /** true = 无斜杠形式(https/host/...),false = 带双斜杠(https://host/...)。 */
+  slashForm: boolean;
+}
+
+function parseBridgeEndpoint(base: string): BridgeEndpoint | null {
+  const doubled = base.match(/^(.*\/)(https?):\/\/([^/?#]+)(\/[^?#]*)?$/);
+  if (doubled) {
+    return { prefix: doubled[1], scheme: doubled[2], host: doubled[3], path: doubled[4] ?? '', slashForm: false };
+  }
+  const slashed = base.match(/^(.*\/)(https?)\/([^/?#]+)(\/[^?#]*)?$/);
+  if (slashed) {
+    return { prefix: slashed[1], scheme: slashed[2], host: slashed[3], path: slashed[4] ?? '', slashForm: true };
+  }
+  return null;
+}
+
+/** 按原来的写法把桥接地址拼回去(保持用户填的形式,别把无斜杠形式又改回 //)。 */
+function renderBridgeEndpoint(endpoint: BridgeEndpoint, path: string): string {
+  return `${endpoint.prefix}${endpoint.scheme}${endpoint.slashForm ? '/' : '://'}${endpoint.host}${path}`;
 }
 
 /**
@@ -222,7 +246,7 @@ function splitEmbeddedEndpoint(base: string): { prefix: string; target: string }
  */
 function naiAuthHeaders(url: string, key: string): Record<string, string> {
   const base = url.trim().replace(/\/+$/, '');
-  return splitEmbeddedEndpoint(base) ? { 'X-NAI-Key': key } : { Authorization: `Bearer ${key}` };
+  return parseBridgeEndpoint(base) ? { 'X-NAI-Key': key } : { Authorization: `Bearer ${key}` };
 }
 
 /**
@@ -240,14 +264,21 @@ function naiAuthHeaders(url: string, key: string): Record<string, string> {
  * - user/subscription:挂在站点根下(官方是 `/user/subscription`,不在 `/ai/` 下);
  *   第三方站多数没有这个接口,404 时 testNaiConnection 退化成「只验模型列表/地址可达」。
  *
- * 地址里若嵌着整段上游地址(桥接写法),前缀保留、规则套在里层,详见 splitEmbeddedEndpoint。
+ * 地址里若嵌着上游地址(桥接写法),前缀保留、规则套在里层,详见 parseBridgeEndpoint。
  */
 export function naiEndpoint(url: string, path: string): string {
   const base = url.trim().replace(/\/+$/, '');
   if (!base) throw new NaiError('请先填写 NAI 接口地址');
-  const embedded = splitEmbeddedEndpoint(base);
-  if (embedded) return embedded.prefix + naiEndpoint(embedded.target, path);
   const seg = path.replace(/^\/+/, '');
+  const bridge = parseBridgeEndpoint(base);
+  if (bridge) {
+    // 桥接地址:前缀与写法(带不带双斜杠)都保持原样,只改里层上游路径
+    if (seg === 'generate-image') return base;
+    if (seg === 'user/subscription') return renderBridgeEndpoint(bridge, '/user/subscription');
+    const bridged = bridge.path.replace(/\/generate-image$/, `/${seg}`);
+    if (bridged !== bridge.path) return renderBridgeEndpoint(bridge, bridged);
+    throw new NaiError(`接口地址需填到生图端点(…/generate-image),才能推出 ${seg};当前地址:${base}`);
+  }
   if (seg === 'generate-image') return endpointAsIs(base);
   if (seg === 'user/subscription') {
     const origin = endpointOrigin(base);
@@ -262,11 +293,8 @@ export function naiEndpoint(url: string, path: string): string {
 export function naiOrigin(url: string): string | null {
   const base = url.trim().replace(/\/+$/, '');
   if (!base) return null;
-  const embedded = splitEmbeddedEndpoint(base);
-  if (embedded) {
-    const inner = naiOrigin(embedded.target);
-    return inner ? `${embedded.prefix}${inner}` : null;
-  }
+  const bridge = parseBridgeEndpoint(base);
+  if (bridge) return renderBridgeEndpoint(bridge, '');
   return endpointOrigin(base);
 }
 

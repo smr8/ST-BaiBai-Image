@@ -936,3 +936,34 @@ describe('桥接地址的相对写法(按页面同源解析)', () => {
     vi.unstubAllGlobals();
   });
 });
+
+describe('桥接地址的无斜杠写法(给会合并 // 的反向代理)', () => {
+  const rel = '/api/plugins/nai-bridge/https/api.rinko.ai/v1/nai/generate-image';
+  const at = (path: string) => `/api/plugins/nai-bridge/https/api.rinko.ai${path}`;
+
+  it('生图端点原样保留', () => {
+    expect(naiEndpoint(rel, 'generate-image')).toBe(rel);
+  });
+
+  it('encode-vibe / 订阅端点只改里层,写法不变', () => {
+    expect(naiEndpoint(rel, 'encode-vibe')).toBe(at('/v1/nai/encode-vibe'));
+    expect(naiEndpoint(rel, 'user/subscription')).toBe(at('/user/subscription'));
+  });
+
+  it('naiOrigin 返回同写法的站点根', () => {
+    expect(naiOrigin(rel)).toBe(at(''));
+  });
+
+  it('绝对前缀 + 无斜杠形式同样支持', () => {
+    const absolute = 'http://192.168.1.5:8000/api/plugins/nai-bridge/https/api.rinko.ai/v1/nai/generate-image';
+    expect(naiEndpoint(absolute, 'encode-vibe')).toBe(
+      'http://192.168.1.5:8000/api/plugins/nai-bridge/https/api.rinko.ai/v1/nai/encode-vibe',
+    );
+  });
+
+  it('http 目标也认', () => {
+    expect(naiOrigin('/api/plugins/nai-bridge/http/api.rinko.ai/v1/nai/generate-image')).toBe(
+      '/api/plugins/nai-bridge/http/api.rinko.ai',
+    );
+  });
+});

@@ -17,12 +17,19 @@ SillyTavern/plugins/nai-bridge/allowed-hosts.json
 ## 接入点地址
 
 ```
-/api/plugins/nai-bridge/https://api.rinko.ai/v1/nai/generate-image
+/api/plugins/nai-bridge/https/api.rinko.ai/v1/nai/generate-image
 ```
 
-用**相对路径**，不要写 `http://localhost:8000/...`：相对地址按页面同源解析，localhost、
-局域网 IP、域名、https 都能直接用；写死主机的话，页面从别的地址打开就变成跨源请求，
-浏览器不会带 ST 的基础鉴权凭据（表现为每次请求弹一次密码框），还要再吃一次 CORS。
+两个要点：
+
+- **相对路径**，不要写 `http://localhost:8000/...`：相对地址按页面同源解析，localhost、
+  局域网 IP、域名、https 都能直接用；写死主机会变成跨源请求，浏览器不带 ST 的鉴权凭据
+  （表现为每次请求弹一次密码框），还要再吃一次 CORS。
+- **无斜杠形式**（`https/api.rinko.ai/...`）：路径里没有 `//`，避开 nginx `merge_slashes`
+  对重复斜杠的合并 —— 域名走反代时那条路径可能被改写，落进另一个 location 又触发鉴权。
+  带双斜杠的老写法同样能用，直连 ST 时没有区别。
+
+插件两种写法都认：`https/api.rinko.ai/路径` 与 `https://api.rinko.ai/路径`。
 
 规则很简单：`/api/plugins/nai-bridge/` 后面接**上游完整地址**，插件原样转发。
 扩展推出 `encode-vibe`、`user/subscription`、`/v1/models` 时会自动沿用同一前缀。

@@ -42,11 +42,33 @@ function loadAllowedHosts() {
   }
 }
 
-/** 从原始 URL 里取挂载点之后的那段(就是上游整段地址,可能含 query)。 */
+/** 从原始 URL 里取挂载点之后的那段(就是上游地址,可能含 query)。 */
 function targetOf(req) {
   const raw = req.originalUrl || req.url || '';
   const index = raw.indexOf(MOUNT);
   return index >= 0 ? raw.slice(index + MOUNT.length) : '';
+}
+
+/**
+ * 解析目标,两种写法都认:
+ *   https://api.rinko.ai/v1/nai/generate-image   (带双斜杠)
+ *   https/api.rinko.ai/v1/nai/generate-image     (无双斜杠,给会合并斜杠的反向代理用)
+ */
+function resolveTarget(target) {
+  if (/^https?:\/\//i.test(target)) {
+    try {
+      return new URL(target);
+    } catch {
+      return null;
+    }
+  }
+  const slashed = target.match(/^(https?)\/([^/?#]+)(\/.*)?$/);
+  if (!slashed) return null;
+  try {
+    return new URL(`${slashed[1]}://${slashed[2]}${slashed[3] || ''}`);
+  } catch {
+    return null;
+  }
 }
 
 async function readBody(req) {
@@ -61,16 +83,11 @@ async function init(router) {
   // use 而不是 all('/*'):Express 4/5 通吃
   router.use(async (req, res) => {
     const target = targetOf(req);
-    if (!/^https?:\/\//i.test(target)) {
-      res.status(400).json({ error: { message: '用法:/api/plugins/nai-bridge/https://目标站/路径' } });
-      return;
-    }
-
-    let url;
-    try {
-      url = new URL(target);
-    } catch {
-      res.status(400).json({ error: { message: `目标地址不合法:${target}` } });
+    const url = resolveTarget(target);
+    if (!url) {
+      res.status(400).json({
+        error: { message: '用法:/api/plugins/nai-bridge/https/api.目标站/路径 或 …/https://api.目标站/路径' },
+      });
       return;
     }
 
